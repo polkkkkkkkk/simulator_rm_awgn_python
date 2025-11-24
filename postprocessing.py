@@ -27,7 +27,6 @@ This module implements postprocessing module with the following functionality:
 
 import multiprocessing
 import os
-import dataclasses
 
 import pandas as pd
 import numpy as np
@@ -36,48 +35,21 @@ from scipy.optimize import minimize
 from scipy.stats import binomtest
 from scipy.interpolate import CubicSpline
 from .channel import AwgnQAMChannel
-from .simulator import load_pickle
-
-
-@dataclasses.dataclass
-class PostprocessingParameters:
-    """
-    Postprocessing parameters like confidence intervlas, maximum regression degree, etc
-    """
-    # Confidence level for error bars
-    confidence_level: float
-    # Bernoulli's regression parameters
-    # Ignore points above this probability of error
-    # Starting from the lowest SNR, find the last point with probability of error
-    # above this threshold and ignore all previous data
-    pe_threshold: float
-    # Maximum regression degree
-    max_degree: float
-    # Maximum degree should not exceed a fixed portion of points collected
-    max_degree_ratio: float
-    # Regression type: 'polynomial' or 'spline'.
-    # The second option may be preferable in the case of error-floor
-    regression_type: str
+from .tools import load_pickle
 
 
 class PostProcessing:
     """
     Generate text/pandas data frame outputs from raw simulation results
     """
-    def __init__(self, **kwargs):
+    def __init__(self, filename, modulation, params):
         # Parameters without default values
-        self.modulation = kwargs.get('modulation')  # Channel modulation
-        self.filename = kwargs.get('filename')
+        self.modulation = modulation  # Channel modulation
+        self.filename = filename
 
         # Parameters not subject to change
         # Confidence level for error bars
-        self.params = PostprocessingParameters(
-            confidence_level=kwargs.get('confidence_level', 0.95),
-            pe_threshold=kwargs.get('pe_threshold', 0.96),
-            max_degree=kwargs.get('max_degree', 15),
-            max_degree_ratio=kwargs.get('max_degree_ratio', 3),
-            regression_type=kwargs.get('regression', 'polynomial')
-        )
+        self.params = params
         # Data update lock
         self.update_lock = multiprocessing.Lock()
         # Cached data access lock
@@ -86,8 +58,12 @@ class PostProcessing:
         # Cached data
         self.pickle_cache = {}
         self.data = None
-        # Try to load data immediately
-        self.get()
+
+    def txt_filename(self):
+        """
+        Get output textfile name
+        """
+        return os.path.splitext(self.filename)[0] + '.txt'
 
     def get(self):
         """
@@ -98,7 +74,7 @@ class PostProcessing:
             self.__reset()
             return None
 
-        txt_file = os.path.splitext(self.filename)[0] + '.txt'
+        txt_file = self.txt_filename()
         if os.path.isfile(txt_file):
             pickle_updated = os.path.getmtime(txt_file) < os.path.getmtime(self.filename)
             if not (pickle_updated or self.data is None):
@@ -152,15 +128,15 @@ class PostProcessing:
         data_pickle = load_pickle(self.filename)
         # Update pickle cache: re-evaluate confidence intervals for updated entries
         for snr, entry in data_pickle.items():
-            if entry['n_exp'] == 0:
+            if entry['tests'] == 0:
                 continue
-            if snr not in self.pickle_cache or entry['n_exp'] != self.pickle_cache[snr]['n_exp']:
+            if snr not in self.pickle_cache or entry['tests'] != self.pickle_cache[snr]['tests']:
                 self.pickle_cache[snr] = data_pickle[snr]
                 # Error bars it the most expensive postprocessing procedure.
                 # Do it only if the data was updated
                 pe_minus, pe_plus = self.bernoulli_confidence(
-                    entry['out_fer'],  # Number of errors
-                    entry['n_exp']  # Number of tests
+                    entry['fe_cum'],  # Number of errors
+                    entry['tests']  # Number of tests
                 )
                 self.pickle_cache[snr]['fer_e_minus'] = pe_minus
                 self.pickle_cache[snr]['fer_e_plus'] = pe_plus
@@ -171,33 +147,26 @@ class PostProcessing:
         """
         Generate pandas Data Frame from cached data
         """
-        entries = list(self.pickle_cache.values())
-        snr_range = np.array([float(k) for k in list(self.pickle_cache.keys())])
-        n_tests = np.array([e['n_exp'] for e in entries])
-        fer_cum = np.array([e['out_fer'] for e in entries])
-        ber_cum = np.array([e['out_ber'] for e in entries])
+        data = dict2pandas(self.pickle_cache)
+        # Add theoretical BER values to immediately detect any bug from plots
+        data['in_ber_ref'] = AwgnQAMChannel(self.modulation).get_ber(data.snr)
 
-        # Create Pandas dataframe
-        data = pd.DataFrame()
-        # Signal-to-noise ratio range
-        data['snr'] = snr_range
-        # Generate frame error rate outputs with error bars
-        data['fer'] = np.array([e['out_fer'] / e['n_exp'] for e in entries])
-        data['fer_e_minus'] = np.array([e['fer_e_minus'] for e in entries])
-        data['fer_e_plus'] = np.array([e['fer_e_plus'] for e in entries])
-        data['fer_fit'] = self.get_bernoulli_fit(snr_range, fer_cum, n_tests)
-
-        data['ber'] = np.array([e['out_ber'] / e['n_exp'] for e in entries])
+        # Generate smoothed BER/FER curves
+        data['fer_fit'] = self.get_bernoulli_fit(
+            data.snr.to_numpy(),
+            data.fe_cum.to_numpy(),
+            data.tests.to_numpy()
+        )
         # Typically, errors in individual bits may be dependent.
         # Thus:
         # 1. One can generate fit without exact number of bits and
         #    use down-scaled values by the number of bits per single test
         # 2. Bit error rate confidence intervals may be useless
-        data['ber_fit'] = self.get_bernoulli_fit(snr_range, ber_cum, n_tests)
-
-        data['in_ber'] = np.array([e['in_ber'] / e['n_exp'] for e in entries])
-        # Add theoretical BER values to immediately detect any bug from plots
-        data['in_ber_ref'] = AwgnQAMChannel(self.modulation).get_ber(data['snr'].to_numpy())
+        data['ber_fit'] = self.get_bernoulli_fit(
+            data.snr.to_numpy(),
+            data.be_cum.to_numpy(),
+            data.tests.to_numpy()
+        )
 
         return data
 
@@ -311,8 +280,8 @@ class BerFitPolynomial(BerFit):
         p_e = self.errors / self.n_tests
         # Note that Gaussian fit does not allow zero probability of error,
         # while the Bernoulli fit allows
-        log_pe = np.log(p_e[p_e > 0])
-        features = np.linalg.pinv(self.feature_matrix[p_e > 0, :]) @ log_pe
+        log_pe = np.log(p_e)
+        features = np.linalg.pinv(self.feature_matrix) @ log_pe
         # Fine-tuned solution for Bernoulli loss
         sol = minimize(self.loss, features, jac=self.jac, method='Newton-CG')
         return np.exp(self.feature_matrix @ sol.x), sol.fun
@@ -379,3 +348,42 @@ class BerFitSpline(BerFit):
         except ValueError:
             return np.inf
         return self.loss_from_points(log_pe)
+
+
+def dict2pandas(data_dict):
+    """
+    Convert dictionary loaded for postprocessing to pandas dataframe
+    """
+    entries = list(data_dict.values())
+    snr_range = np.array([float(k) for k in list(data_dict.keys())])
+
+    # Create Pandas dataframe
+    data = pd.DataFrame()
+    # Signal-to-noise ratio range
+    data['snr'] = snr_range
+    # Copy cumulative statistics
+    fields = ['tests', 'fe_cum', 'be_cum', 'in_be_cum', 'fer_e_minus', 'fer_e_plus']
+    for field in fields:
+        data[field] = np.array([e[field] for e in entries])
+
+    # Drop points having zero tests
+    data = data.drop(data[data.tests == 0].index)
+    # Drop points having zero frame errors
+    data = data.drop(data[data.fe_cum == 0].index)
+
+    # Derive values requiring division by the number of tests
+    data['fer'] = data.fe_cum / data.tests
+    data['ber'] = data.be_cum / data.tests
+    data['in_ber'] = data.in_be_cum / data.tests
+
+    # Drop points having zero tests
+    data = data.drop(data[data.tests == 0].index)
+    # Drop points having zero frame errors
+    data = data.drop(data[data.fe_cum == 0].index)
+
+    # Derive values requiring division by the number of tests
+    data['fer'] = data.fe_cum / data.tests
+    data['ber'] = data.be_cum / data.tests
+    data['in_ber'] = data.in_be_cum / data.tests
+
+    return data

@@ -19,35 +19,75 @@ Usage (from .. directory): python3 -m simulator_awgn_python.demo
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-import logging
+import dataclasses
 import numpy as np
 
-from .simulator import DataEntry
-from .channel import AwgnQAMChannel
-from .tools import run_all_experiments, enable_log
+from .data_storage import DataEntry
+from .channel import AwgnQAMChannel, output_ber
+from .simulator import run_all_experiments
 
 
-# This is a per-process global variable
-# that keeps all pre-initialized bulky data to reduce communication overhead in parallel pool
-DEMO_CHANNEL = None
+@dataclasses.dataclass
+class DemoExperimentConfig:
+    """
+    Demo experiment settings. These settings a passed to the experiment instance constructor
+    """
+    modulation: str  # Modulation. A string supported by AwgnQAMChannel
+    block_length: int  # Code block length
+    correctable_errors: int  # The number of errors that can be corrected
+
+    def __post_init__(self):
+        # Attributes below __must__ be represented by any type of experiment
+        #  - title: Required by live-plot functionality to print a graph title
+        self.title = self.get_title()
+        #  - filename: Required by simulator to store simulation results
+        self.filename = self.get_filename()
+        #  - inf_its_count: The number of information bits required to print simulated bit-rate
+        self.inf_bits_count = self.block_length
+
+        # Sanity checks go here:
+        if self.correctable_errors <= 0:
+            raise ValueError('The number of correctable errors must be a positive integer')
+        if self.block_length <= 0:
+            raise ValueError('Block length must be a positive integer')
+
+    def __str__(self):
+        """
+        Print to double-check the correctness of the configuration to be simulated
+        """
+        msg = f'Block length:          {self.block_length}\n'
+        msg += f'Correctable errors:    {self.correctable_errors}\n'
+        msg += f'Modulation:            {self.modulation}\n'
+        msg += f'Output filename:       {self.filename}\n'
+        msg += f'Plot title:            {self.title}\n'
+        msg += f'Information bit count: {self.inf_bits_count} (for sim. bit-rate estimation)'
+        return msg
+
+    def get_title(self):
+        """
+        Get a title for live-plot tool
+        """
+        return f'Demo. n = {self.block_length}, t = {self.correctable_errors}, {self.modulation}'
+
+    def get_filename(self):
+        """
+        Get output filename to store simulation results
+        """
+        return f'demo_n{self.block_length}_t{self.correctable_errors}_{self.modulation}.pickle'
 
 
-class DemoExperiment:
+class DemoExperimentInstance:
     """
     This class represents a single experiment run.
     The method run is further taken by Simulator
     """
-    def __init__(self, block_len: int, correctable_errors: int, modulation: str):
+    def __init__(self, settings):
         """
         Implements a simple experiment with a code that can correct some fixed number of errors
-        :param block_len: Code block length
-        :param correctable_errors: the number of errors that can be corrected
-        :param modulation: Modulation, supported 'qpsk' and 'bpsk'
+        :param settings are experiment settings described above
         """
-        # Modulation parameter must be present in the experiment instance if tools.py are used
-        self.modulation = modulation
-        self.block_len = block_len  # Block length
-        self.correctable_errors = correctable_errors  # The number of errors that can be corrected
+        self.settings = settings
+        self.channel = AwgnQAMChannel(self.settings.modulation)
 
     def run(self, snr_db, rng):
         """
@@ -56,65 +96,25 @@ class DemoExperiment:
         :param rng: Random number generator instance
         :return: DataEntry with results of single tet
         """
-        cwd = (rng.random(size=self.block_len) < 0.5).astype(np.uint8)
-        [llr_channel, in_ber, in_ser] = DEMO_CHANNEL.run(cwd, snr_db, rng)
+        cwd = (rng.random(size=self.settings.block_length) < 0.5).astype(np.uint8)
+        [llr_channel, in_ber, in_ser] = self.channel.run(cwd, snr_db, rng)
         cwd_hat = llr_channel < 0
-        if np.sum(cwd_hat != cwd) <= self.correctable_errors:
+        if np.sum(cwd_hat != cwd) <= self.settings.correctable_errors:
             cwd_hat = cwd
-        out_ber = np.mean(cwd_hat != cwd)
+        out_ber = output_ber(1 - 2 * cwd_hat.astype(np.int32), cwd)
         # Fill the output statistics
-        chs = DataEntry()
-        chs.in_ber = in_ber
-        chs.in_ser = in_ser
-        chs.out_ber = out_ber
-        chs.out_fer = out_ber > 0
-        chs.n_exp = 1
-        return chs
-
-    def init_worker(self):
-        """
-        This method instantiates all per-worker global variables and classes
-        If the software uses dynamically linked libraries, they must be loaded
-        within this method.
-        :return: Initialized per-process global parameters
-        """
-        global DEMO_CHANNEL
-        DEMO_CHANNEL = AwgnQAMChannel(self.modulation)
-
-    # Functions required for postprocessing
-    def get_filename(self):
-        """
-        Get filename for simulated data pickle file. As different experiments
-        may have different parameters, filename generation is a responsibility
-        of the experiment class.
-        """
-        return f'demo_n{self.block_len}_t{self.correctable_errors}_{self.modulation}.pickle'
-
-    def get_title(self):
-        """
-        Return a human-readable string describing the experiment. To appear in dash plot
-        """
-        return f'Demo. n = {self.block_len}, t = {self.correctable_errors}, {self.modulation}'
-
-
-def get_experiment(**kwargs):
-    """
-    Function generating experiment instance from kwargs. Required for automated experiment runner
-    """
-    return DemoExperiment(**kwargs)
+        return DataEntry(
+            in_be_cum=in_ber,
+            in_se_cum=in_ser,
+            be_cum=out_ber,
+            fe_cum=out_ber > 0,
+            tests=1
+        )
 
 
 if __name__ == '__main__':
-    # Write simulator output to file to track the simulation process
-    enable_log(
-        'simulator_awgn_python.simulator', logging.DEBUG, 'simulator.log'
-    )
-    # To run experiments, provide a function that instantiates the experiment,
-    # and provide address to generate the URL for the live-plot.
+    # Usage: python3 -m simulator_awgn_python.demo --config=<json config>.json
     # To interrupt the simulation, press Ctrl+C.
     # After the simulation ends, the live-plot server will continue working
     # until Ctrl+C is pressed.
-    run_all_experiments(
-        get_experiment,
-        address='127.0.0.1', start_port=8888, update_ms=5000
-    )
+    run_all_experiments(DemoExperimentConfig, DemoExperimentInstance)

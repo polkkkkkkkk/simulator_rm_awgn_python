@@ -29,16 +29,14 @@ class PlotServer:
     """
     Create/run Dash application server
     """
-    def __init__(self, **kwargs):
+    def __init__(self, plot_title, settings, postproc_instance):
         # Disable HTML log
         log = logging.getLogger('werkzeug')
         log.setLevel(logging.ERROR)
 
-        self.ip_address = kwargs.get('ip_address', '127.0.0.1')
-        self.port = kwargs.get('port', 8888)
-        self.update_ms = kwargs.get('update_ms', 1000)
-        self.title = kwargs.get('title')
-        self.postproc = kwargs.get('postproc_instance')
+        self.settings = settings
+        self.title = plot_title
+        self.postproc = postproc_instance
 
     def styling(self, fig):
         """
@@ -138,7 +136,7 @@ class PlotServer:
                 }),
             dcc.Interval(
                 id="interval",
-                interval=self.update_ms,
+                interval=self.settings.update_ms,
                 n_intervals=0  # Unlimited number of updates
             )
         ])
@@ -146,4 +144,4 @@ class PlotServer:
             Output('graph', 'figure'),
             [Input('interval', 'n_intervals')],
         )(self.update_figure)
-        app.run_server(host=self.ip_address, port=self.port, debug=False)
+        app.run(host=self.settings.ip_address, port=self.settings.start_port, debug=False)

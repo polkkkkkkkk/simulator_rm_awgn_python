@@ -1,5 +1,5 @@
 """
-This module represents tools to build and automate experiments
+Tool function to handle input/output data
 """
 
 # This file is part of the simulator_awgn_python distribution
@@ -18,21 +18,85 @@ This module represents tools to build and automate experiments
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-
 import os
 import sys
-import itertools
+import pickle
 import json
-import argparse
-import signal
-import logging
-from functools import partial
-import multiprocessing as mp
 import numpy as np
 
-from .simulator import DataEntry, DataStorage, Simulator
-from .postprocessing import PostProcessing
-from .live_plot import PlotServer
+from filelock import FileLock
+
+
+def load_pickle(filename):
+    """
+    Load pickle file using file lock
+    """
+    with FileLock(filename + '.lock'):
+        with open(filename, 'rb') as file_handle:
+            return pickle.load(file_handle)
+
+
+def save_pickle(filename, data):
+    """
+    Save pickle using file lock
+    """
+    with FileLock(filename + '.lock'):
+        with open(filename, 'wb') as file_handle:
+            pickle.dump(data, file_handle, 2)
+
+
+def load_json(config_file):
+    """
+    Load JSON config and handle errors
+    """
+    if not os.path.isfile(config_file):
+        print(f'Configuration file {config_file} not found')
+        sys.exit(1)
+    try:
+        with open(config_file, 'r', encoding='utf-8') as fdesc:
+            return json.load(fdesc)
+    except json.JSONDecodeError as exc:
+        print(f'Can not load configuration file {config_file}:', exc)
+        sys.exit(1)
+
+
+def dir_exists(filename):
+    """
+    To avoid crash, directory of the file to be written must exist
+    """
+    dirname = os.path.split(filename)[0]
+    if dirname != '' and not os.path.isdir(dirname):
+        raise ValueError(f'File path contains non-existing \'{dirname}\' directory.')
+
+
+def get_members(obj):
+    """
+    Tool function to check member attributes of the object provided by user
+    :param obj: object to be checked
+    :return: list of member attributes
+    """
+    return [a for a in dir(obj) if not callable(getattr(obj, a)) and not a.startswith("__")]
+
+
+def dataclass_merge(result, other_list):
+    """
+    Merge a dataclass list to a single result
+    """
+    if result is None:
+        result = other_list.pop(0)
+    members = get_members(result)
+    for member in members:
+        val = getattr(result, member) + sum(getattr(other, member) for other in other_list)
+        setattr(result, member, val)
+    return result
+
+
+def snr_db_str(snr_db, snr_precision):
+    """
+    Print SNR in accordance with selected precision
+    """
+    str_template = f'SNR %+2.{snr_precision}f dB'
+    return str_template % snr_db
 
 
 def str2num(strnum):
@@ -45,7 +109,7 @@ def str2num(strnum):
         return float(strnum)
 
 
-def range_from_string(snr_range):
+def read_array(snr_range):
     """
     Read SNR range from different formats
     - Single number as a string
@@ -56,6 +120,8 @@ def range_from_string(snr_range):
     - np.array()
     """
     if isinstance(snr_range, str):
+        if snr_range == '':
+            return None
         split = snr_range.split(':')
         if len(split) == 1:
             return np.array(str2num(split[0]))
@@ -67,163 +133,28 @@ def range_from_string(snr_range):
                 str2num(split[2]) + str2num(split[1]),
                 str2num(split[1])
             )
-        raise ValueError('Incorrect format of the SNR range')
+        raise ValueError('Incorrect format of the range')
     if isinstance(snr_range, list):
+        if not snr_range:
+            return None
         snr_range = np.array(snr_range)
     if isinstance(snr_range, np.ndarray):
         if len(snr_range.shape) > 1:
-            raise ValueError('SNR range must be an 1-D array')
+            raise ValueError('Range must be an 1-D array')
         return snr_range
-    raise ValueError('Incorrect format of the SNR range')
+    raise ValueError('Incorrect format of the range')
 
 
-def enable_log(name, level=logging.DEBUG, filename=None):
+def load_settings(typename, param_dict):
     """
-    Enable logging with proper formats
+    Load settings: dict->dataclass, provides error handling
     """
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    if filename is None:
-        handler = logging.StreamHandler(stream=sys.stdout)
-    else:
-        handler = logging.FileHandler(filename)
-    handler.setFormatter(logging.Formatter('%(asctime)s %(name)s-%(levelname)s: %(message)s'))
-    handler.setLevel(level)
-    logger.addHandler(handler)
-
-
-def load_config():
-    """
-    Parse command line arguments and load configuration file
-    """
-    parser = argparse.ArgumentParser(description='Simulate error-correcting codes')
-    parser.add_argument('--config', help='Filename with simulation parameters')
-    args = parser.parse_args()
-    if not os.path.isfile(args.config):
-        print('Configuration file not found.')
-        sys.exit(0)
-    with open(args.config, 'r', encoding='utf-8') as file_desc:
-        try:
-            return json.load(file_desc)
-        except json.decoder.JSONDecodeError:
-            print('Invalid JSON format')
-            sys.exit(1)
-
-
-def expand_experiment_parameters(exp_params: dict):
-    """
-    If any parameter is a list, then run experiments iterating through this list
-    If there are multiple list in parameters, the experiment setup is a product of this lists
-    Total number of experiments will be a product of all lengths
-    :param exp_params Experiment parameters
-    """
-    iterate_through = {}
-    for param in exp_params:
-        if isinstance(exp_params[param], list):
-            print('Iterate through', param, ':\t', exp_params[param])
-            iterate_through[param] = exp_params[param]
-    if not iterate_through:
-        return [exp_params]
-
-    all_experiments = []
-    param_names = list(iterate_through.keys())
-    for param_tuple in itertools.product(*iterate_through.values()):
-        for i, param in enumerate(param_names):
-            exp_params[param] = param_tuple[i]
-        all_experiments.append(exp_params.copy())
-    return all_experiments
-
-
-def simulate(experiment, snr_range, **kwargs):
-    """
-    Run simulations
-    """
-    sim_data = DataStorage(
-        DataEntry,
-        experiment.get_filename()
-    )
-    simulator = Simulator(storage=sim_data, experiment=experiment)
-    # Add SNR range to run() method in addition to parameters loaded from config
-    kwargs['snr_range'] = range_from_string(snr_range)
-    simulator.run(**kwargs)
-    simulator.close()
-
-
-def run_plot_server(filename, modulation, **kwargs):
-    """
-    Target-function for live-plot server. Redirect stdout to log file
-    """
-    address = kwargs.get('address')
-    update_ms = kwargs.get('update_ms')
-    port = kwargs.get('port')
-    title = kwargs.get('title')
-    # server_logfile = kwargs.get('server_logfile', 'plot_server.log')
-    postproc_params = kwargs.get('postprocessing', {})
-    postproc_instance = PostProcessing(
-            filename=filename,
-            modulation=modulation,
-            **postproc_params
-    )
-    PlotServer(
-        ip_address=address,
-        port=port,
-        update_ms=update_ms,
-        title=title,
-        postproc_instance=postproc_instance
-    ).run()
-
-
-def run_all_experiments(get_experiment_fcn, address='127.0.0.1', start_port=8888, update_ms=1000):
-    """
-    Main simulation script
-    """
-    # Load and expand configuration file
-    sim_params = load_config()
-    if 'experiment' not in sim_params:
-        raise ValueError('Wrong configuration: missing experiment description')
-    if 'simulation' not in sim_params:
-        raise ValueError('Wrong configuration: missing simulation setup description')
-
-    postproc_params = sim_params['postprocessing'] if 'postprocessing' in sim_params else {}
-    all_experiments = expand_experiment_parameters(sim_params['experiment'])
-
-    # Run all requested experiments
-    server_processes = []
-
-    # Run all experiments
-    for i, exp_params in enumerate(all_experiments):
-        exp_instance = get_experiment_fcn(**exp_params)
-        print(f'Data: {exp_instance.get_filename()}')
-        server_start_fcn = partial(
-            run_plot_server,
-            address=address,
-            port=start_port + i,
-            update_ms=update_ms,
-            title=exp_instance.get_title(),
-            postprocessing=postproc_params
-        )
-        plot_process = mp.Process(
-            target=server_start_fcn,
-            args=(exp_instance.get_filename(), exp_instance.modulation)
-        )
-        print('Starting plot server...')
-        plot_process.start()
-        server_processes.append(plot_process)
-        simulate(exp_instance, **sim_params['simulation'])
-    # When all experiments complete, plot server will continue working
-    print('All experiments complete. Press Ctrl+C to stop plot servers.')
-    # Keyboard interrupt can be captured by plot-server only
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-    # Postprocessing (Ctrl + C pressed)
-    for plot_process in server_processes:
-        plot_process.join()
-        print(f'Plot server {plot_process.pid} terminated.')
-    for i, exp_params in enumerate(all_experiments):
-        exp_instance = get_experiment_fcn(**exp_params)
-        print(f'Postprocessing {exp_instance.get_filename()}')
-        PostProcessing(
-            filename=exp_instance.get_filename(),
-            modulation=exp_instance.modulation
-        ).get()
-    print('Done.')
+    try:
+        settings = typename(**param_dict)
+    except TypeError as exc:
+        print(f'Can not load {typename.__name__}: ', exc)
+        sys.exit(1)
+    except ValueError as exc:
+        print(f'Illegal value of parameter(s) of {typename.__name__}:', exc)
+        sys.exit(1)
+    return settings

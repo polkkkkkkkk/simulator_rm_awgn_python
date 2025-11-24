@@ -73,7 +73,7 @@ class AwgnQAMChannel:
         """
         # Modulation
         if not use_adapter:
-            # Default: moduate transmitted bits
+            # Default: modulate transmitted bits
             tx_symb = self.modulate(tx_bits)
             adapter = None  # Keep code checker happy
         else:
@@ -169,6 +169,28 @@ class AwgnQAMChannel:
         Convert logarithmic to linear scale
         """
         return 10 ** (val_db / 10)
+
+
+def output_ber(llr_out, cwd, inf_bits=np.array([])):
+    """
+    Calculate the output BER
+    :param llr_out Decoded log-likelihood ratios
+    :param cwd Transmitted codeword
+    :param inf_bits list of information bits indices. If None, estimate BER given a whole codeword
+    :return BER (Bit Error Rate)
+    """
+    if np.sum(np.isnan(llr_out)):
+        raise ValueError('NaN found in the output LLR vector')
+    if np.sum(np.isinf(llr_out)):
+        raise ValueError('Infinite values found in the output LLR vector')
+    cwd_hat = llr_out < 0
+    # Erasures must not result in correct codeword estimation
+    cwd_hat[llr_out == 0] = np.nan
+    if inf_bits.size == 0:
+        # Estimate BER over all codeword positions
+        return np.mean(cwd_hat != cwd)
+    # Use information bit indices to calculate BER
+    return np.mean(cwd_hat[inf_bits] != cwd[inf_bits])
 
 
 if __name__ == '__main__':
