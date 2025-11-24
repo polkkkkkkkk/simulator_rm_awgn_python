@@ -1,0 +1,6 @@
+dash
+filelock
+numpy
+pandas
+scikit-commpy
+scipy
