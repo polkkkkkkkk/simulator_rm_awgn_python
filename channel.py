@@ -57,7 +57,7 @@ class AwgnQAMChannel:
             self.demodulate = AwgnQAMChannel.demodulate_pam4
             self.get_ber = partial(AwgnQAMChannel.get_pam4_ber, dof=2)
         else:
-            raise NotImplementedError(f'Modulation {modulation} is not supported')
+            raise ValueError(f'Modulation {modulation} is not supported')
         self.c_size = 2 ** self.bps  # Constellation size
 
     def run(self, tx_bits, snr_db, rng, use_adapter=False):

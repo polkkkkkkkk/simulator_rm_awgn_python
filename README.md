@@ -6,29 +6,12 @@ This module provides simulation routines for error-correcting codes. It provides
 * Parallel execution of multiple tests for different signal-to-noise ratios
 * [Proper initialization](https://numpy.org/doc/stable/reference/random/bit_generators/generated/numpy.random.SeedSequence.html) of the random number generator to provide independent RNGs within multiple processes. By default, the [numpy](https://pypi.org/project/numpy/) `default_rng` [random number generator](https://numpy.org/doc/stable/reference/random/generator.html) is used
 
-## Module structure
 
-### Simulator
-
-The structure of the `Simulator` is as follows. It starts from the `DataEntry` class, which keeps decoding statistics for a single SNR point. These statistics can be incrementally updated.
-
-The `DataStorage` accumulates multiple SNR points. It also provides data-saving routines and informs the `Simulator` whether to proceed to the next SNR or stop the simulations.
-
-The `Simulator` runs user-specified decoding function in parallel until the simulation reaches the requested number of errors, or the number of experiments, or reaches the minimum probability of error specified by user.
-
-To instantiate the `DataStorage`, the user must provide a `DataEntry` type (any class that implements methods like print, merge, calculates error count and error probability).
-
-For more details, refer to the [demo](demo.py) script.
-### Simulation scripts
-Some automated routines are presented in [tools.py](tools.py), which allow:
-* Gradually increase the batch size to reduce communication overhead
-* Gradually increase the maximum number of errors to be collected such that a user has the simulated results that gradually improve the collected statistics (default for automated experiments)
-* To automate experiments (see `run_all_experiments` function). Experiments assume a JSON configuration file to be parsed. If some parameters are lists, multiple experiments with the iteration over elements are conducted.
-### Demo
+## Demo
 [demo](demo.py) scripts runs a dummy decoder that is able to correct some fixed number of errors. Default `DataEntry` class provides input/output BER (bit error rate), input SER (symbol error rate), and the output FER (frame error rate).
 One can implement any arbitrary experiment. To avoid communication overhead, avoid keeping bulkey structures within this class.
 
-### Live plot
+## Live plot
 To check the simulation result in realtime, [demo](demo.py) starts a process that periodically loads the pickle file with the simulated data, performs postprocessing, and generates a [plotly](https://plotly.com) figure. One can view this figure using `dash` (URL will be printed to [demo.py](demo.py) output).
 The following plots are available:
 1. Uncoded bit error rate and its theoretical values
@@ -43,7 +26,7 @@ The code is assumed to be used as a module. To run demo experiment, proceed thro
 * Create a JSON file specifying the experiment. Demo-example is shown below:
   - JSON file consists of two sections: "experiment" and "simulations". The first section keeps all data required to instantiate the experiment. The second section keeps all simulation-related data. Below is an example with comments.
   - To instantiate the demo experiment, specify the following parameters:
-    - `block_len` specifies the codeword length
+    - `block_length` specifies the codeword length
     - `correctable_errors` specifies the number of errors that demo-decoder can correct (see [demo.py](demo.py))
     - `modulation` a string constant specifying the modulation (upper or lower case). supported values are 'BPSK', 'QPSK', and 'QAM-16'
   - To run simulations, specify the following parameters:
@@ -52,35 +35,39 @@ The code is assumed to be used as a module. To run demo experiment, proceed thro
     - `max_experiments` is a maximum number of experiments to conduct. If this number is hit before the condition above, simulator will proceed to the next SNR point
     - `min_error_prob` is a minimum probability of error to be simulated. If (after the conditions above satisfied) the probability of error goes below the specified value, simulation stops. Simulator assumes that the probability of error decreases with the SNR increase, and it iterates through the sorted SNR values. Note that some requested SNR points may not be evaluated.
     - `chunk_size` is the number of single tests to be performed by a worker at once. If not specified, default value is one. If the batch size is too large, data merging may become a bottleneck. This may happen when trying to evaluate very small probability of errors. To improve simulation efficiency, try increasing this parameter.
-    - `look_ahead` allows to schedule multiple batches simultaneously to optimize the CPU usage. Default is 2. See `Scheduler` class in [simulator.py](simulator.py) for more details. If this parameter is grater than zero, then `look_ahead` next SNR points are simulated even if the point under consideration has not captured enough experiments.
+    - `look_ahead` allows to schedule multiple batches simultaneously to optimize the CPU usage.
   - To configure postprocessing, specify the following parameters:
     - `confidence_level` is a confidence level for error-bars
     - `pe_threshold` is a maximum probability of error to be included in the regression model (values close to one may result in numerical instability)
     - `max_degree` is a maximum regression degree (in the case of spline regression - a maximum number of reference points)
     - `max_degree_ratio` is a upper-bound for regression degree if the number pf points is small. Regression degree can not be larger than `N/max_degree_ratio`, where `N` is the number of points simulated
-    - `regression` is a regression type. For the `polynomial` case, a polynomial model (in log-domain) with a Bernoulli loss function is applied. For the `spline` case, a set of adjustable reference points defines a smooth curve. The latter option is better suitable for the case when an error-floor appears.
+    - `regression_type` is a regression type. For the `polynomial` case, a polynomial model (in log-domain) with a Bernoulli loss function is applied. For the `spline` case, a set of adjustable reference points defines a smooth curve. The latter option is better suitable for the case when an error-floor appears.
   - The summarized JSON example is presented below:
 ```json
 {
   "experiment": {
-    "block_len": 32,
+    "block_length": 32,
     "correctable_errors": 4,
     "modulation": "qpsk"
   },
   "simulation": {
-    "snr_range": "-5:0.02:10",
+    "snr_range": "-5:0.01:10",
     "max_errors": 50,
     "max_experiments": 1e7,
     "min_error_prob": 1e-4,
-    "chunk_size": 1,
-    "look_ahead": 2
+    "snr_precision": 3
   },
   "postprocessing": {
     "confidence_level": 0.95,
     "pe_threshold": 0.95,
     "max_degree": 15,
     "max_degree_ratio": 3,
-    "regression": "polynomial"
+    "regression_type": "polynomial"
+  },
+  "visualization": {
+    "ip_address": "127.0.0.1",
+    "start_port": 8888,
+    "update_ms": 5000
   }
 }
 ```
@@ -92,12 +79,6 @@ python3 -m simulator_awgn_python.demo --config=<json_file>.json
 ```
 
 ## Requirements
-This module was tested in Python 3.8 under UNIX OS with the following packages installed:
+See [requirements.txt](requirements.txt)
+This module was tested in Python 3.13 under UNIX OS.
 
-* Numerical python [numpy](https://pypi.org/project/numpy/)
-* Scientific python [scipy](https://scipy.org) for postprocessing and AWGN channel
-* [plotly](https://plotly.com) and [dash](https://pypi.org/project/dash/) for live-plots
-* [pandas](https://pandas.pydata.org) for postprocessing
-* [filelock](https://pypi.org/project/filelock/) to lock pickle data file when simultaneously reading/writing to it
-
-To test the AWGN channel, run the test [script](test_awgn_channel.py) that requires [scikit-commpy](https://pypi.org/project/scikit-commpy/). Note that the latter is considerably slower.

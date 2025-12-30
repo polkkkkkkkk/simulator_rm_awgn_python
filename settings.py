@@ -25,6 +25,7 @@ import dataclasses
 import socket
 import itertools
 import numpy as np
+from rich import print
 
 from .tools import read_array, dir_exists, load_json, load_settings
 
@@ -138,7 +139,7 @@ class SimulationSettings:
         msg += f'Chunk size:                    {self.chunk_size}\n'
         msg += f'Maximum batch size:            {self.max_batch_size}\n'
         msg += f'The number of workers:         {self.n_workers}\n'
-        msg += f'Simulation log file:           {self.log_file}'
+        msg += f'Simulation log file:          \'{self.log_file}\''
         return msg
 
 
@@ -170,7 +171,7 @@ class PostprocessingSettings:
         msg += f'Error probability upper threshold (Bernoulli fit): {self.pe_threshold:1.4f}\n'
         msg += 'Maximum regression degree:                         '
         msg += f'MIN({self.max_degree}, #points / {self.max_degree_ratio})\n'
-        msg += f'Regression type (\'spline\' or \'polynomial\'):        {self.regression_type}'
+        msg += f'Regression type (\'spline\' or \'polynomial\'):       \'{self.regression_type}\''
         return msg
 
     def __post_init__(self):
@@ -227,7 +228,7 @@ class VisualizationSettings:
 
     def __str__(self):
         msg = f'Plot server URL: {self.url} updated each {self.update_ms / 1e3:1.3f} seconds.\n'
-        msg += f'Logfile:         {self.log_file}'
+        msg += f'Logfile:        \'{self.log_file}\''
         return msg
 
 
@@ -323,7 +324,6 @@ def expand_experiment_parameters(exp_params: dict):
     iterate_through = {}
     for param in exp_params:
         if isinstance(exp_params[param], list):
-            print('Iterate through', param, ':\t', exp_params[param])
             iterate_through[param] = exp_params[param]
     if not iterate_through:
         return [exp_params]

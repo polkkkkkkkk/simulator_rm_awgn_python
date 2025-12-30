@@ -27,6 +27,7 @@ import time
 import multiprocessing as mp
 
 from functools import partial
+from rich import print
 
 from .postprocessing import PostProcessing
 from .live_plot import PlotServer
