@@ -23,7 +23,7 @@ import dataclasses
 import numpy as np
 
 from .data_storage import DataEntry
-from .channel import AwgnQAMChannel, output_ber
+from .channel import AwgnQAMChannel, output_ber, random_bits
 from .simulator import run_all_experiments
 
 
@@ -87,7 +87,11 @@ class DemoExperimentInstance:
         :param settings are experiment settings described above
         """
         self.settings = settings
-        self.channel = AwgnQAMChannel(self.settings.modulation)
+        # Prepare transmitted bits placeholder and LLR placeholder
+        self.tx_bits = np.zeros((self.settings.block_length,), dtype=np.uint8)
+        self.llr = np.zeros((self.settings.block_length,), dtype=np.float64)
+        # Channel adapter is not required for randomly-generated codewords
+        self.channel = AwgnQAMChannel(self.settings.modulation, self.tx_bits, self.llr, False)
 
     def run(self, snr_db, rng):
         """
@@ -96,12 +100,12 @@ class DemoExperimentInstance:
         :param rng: Random number generator instance
         :return: DataEntry with results of single tet
         """
-        cwd = (rng.random(size=self.settings.block_length) < 0.5).astype(np.uint8)
-        [llr_channel, in_ber, in_ser] = self.channel.run(cwd, snr_db, rng)
-        cwd_hat = llr_channel < 0
-        if np.sum(cwd_hat != cwd) <= self.settings.correctable_errors:
-            cwd_hat = cwd
-        out_ber = output_ber(1 - 2 * cwd_hat.astype(np.int32), cwd)
+        random_bits(self.tx_bits, rng)
+        in_ber, in_ser = self.channel.run(snr_db, rng)
+        cwd_hat = self.llr < 0
+        if np.sum(cwd_hat != self.tx_bits) <= self.settings.correctable_errors:
+            cwd_hat = self.tx_bits
+        out_ber = output_ber(1 - 2 * cwd_hat.astype(np.int32), self.tx_bits)
         # Fill the output statistics
         return DataEntry(
             in_be_cum=in_ber,

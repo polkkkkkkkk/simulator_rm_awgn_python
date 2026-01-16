@@ -34,7 +34,7 @@ import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import binomtest
 from scipy.interpolate import CubicSpline
-from .channel import AwgnQAMChannel
+from .channel import Modulation
 from .tools import load_pickle
 
 
@@ -149,7 +149,7 @@ class PostProcessing:
         """
         data = dict2pandas(self.pickle_cache)
         # Add theoretical BER values to immediately detect any bug from plots
-        data['in_ber_ref'] = AwgnQAMChannel(self.modulation).get_ber(data.snr)
+        data['in_ber_ref'] = Modulation(self.modulation).get_ber(data.snr)
 
         # Generate smoothed BER/FER curves
         data['fer_fit'] = self.get_bernoulli_fit(
