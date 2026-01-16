@@ -23,7 +23,7 @@ import dataclasses
 import numpy as np
 
 from .data_storage import DataEntry
-from .channel import AwgnQAMChannel, output_ber, random_bits
+from .channel import AwgnQAMChannel, output_ber, random_bits, lib_compile
 from .simulator import run_all_experiments
 
 
@@ -121,4 +121,5 @@ if __name__ == '__main__':
     # To interrupt the simulation, press Ctrl+C.
     # After the simulation ends, the live-plot server will continue working
     # until Ctrl+C is pressed.
+    lib_compile()
     run_all_experiments(DemoExperimentConfig, DemoExperimentInstance)
