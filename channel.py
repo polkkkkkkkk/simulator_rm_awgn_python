@@ -40,19 +40,27 @@ def lib_compile():
     compile_shared(['channel_impl'], LIB_PATH)
 
 
-def lib_args(dtype):
+def lib_args(dtype, with_repetitions=False):
     """
     Get channel implementation argument list to load shared library
     """
-    return [
+    args = [
         np.ctypeslib.ndpointer(dtype=np.uint8),  # Transmitted bits
         # Standard normal gaussian samples
         np.ctypeslib.ndpointer(dtype=dtype),
         ctypes.c_uint,                          # Block length (bits)
         ctypes.c_double,                        # Noise stddev
+    ]
+    if with_repetitions:
+        args.extend([
+            ctypes.c_int,                       # Last repeat index
+            ctypes.c_int,                       # Number of repetitions
+        ])
+    args.extend([
         np.ctypeslib.ndpointer(dtype=dtype),    # Channel LLR
         np.ctypeslib.ndpointer(dtype=dtype)     # Output statistics [BER, SER]
-    ]
+    ])
+    return args
 
 
 def load_shared_object():
@@ -63,14 +71,14 @@ def load_shared_object():
     lib = ctypes.CDLL(os.path.join(wdir, LIB_PATH))
     # Tanner graph initializer
     # C++ channel implementation arguments:
+    lib.run_bpsk_channel_f32.argtypes = lib_args(np.float32, True)
     impl_args = lib_args(np.float32)
-    lib.run_bpsk_channel_f32.argtypes = impl_args
     lib.run_pam4_channel_f32.argtypes = impl_args
     lib.run_qpsk_channel_f32.argtypes = impl_args
     lib.run_qam16_channel_f32.argtypes = impl_args
 
+    lib.run_bpsk_channel_f64.argtypes = lib_args(np.float64, True)
     impl_args = lib_args(np.float64)
-    lib.run_bpsk_channel_f64.argtypes = impl_args
     lib.run_pam4_channel_f64.argtypes = impl_args
     lib.run_qpsk_channel_f64.argtypes = impl_args
     lib.run_qam16_channel_f64.argtypes = impl_args
@@ -171,7 +179,7 @@ class AwgnQAMChannel:
     NOTE: especially when running simulations with all-zero codewords
     """
 
-    def __init__(self, modulation, tx_bits_placeholder, llr_placeholder, use_adapter):
+    def __init__(self, modulation, tx_bits_placeholder, llr_placeholder, use_adapter, last_repeat_index=-1, number_repetitions=1):
         # Load modulation parameters
         self.modulation = Modulation(modulation)
         # Check placeholders: types and length
@@ -191,6 +199,19 @@ class AwgnQAMChannel:
         use_adapter = use_adapter and modulation.lower() in ['pam-4', 'qam-16']
         self.run = self.__run_adapter if use_adapter else self.__run
 
+        self.last_repeat_index = last_repeat_index
+        self.number_repetitions = number_repetitions
+
+        if self.number_repetitions < 1:
+            raise ValueError('number_repetitions must be at least 1')
+        if self.last_repeat_index < -1:
+            raise ValueError('last_repeat_index must be at least -1')
+        if self.last_repeat_index >= len(self.tx_bits):
+            raise ValueError('last_repeat_index is out of range')
+        if modulation.lower() != 'bpsk' and (
+                self.last_repeat_index != -1 or self.number_repetitions != 1):
+            raise ValueError('Repetitions are currently supported only for BPSK')
+
 
     def __run(self, snr_db, rng):
         """
@@ -205,14 +226,16 @@ class AwgnQAMChannel:
         """
         self.generate_noise(rng)
         stats = np.zeros((2,), dtype=self.dtype)
-        self.impl(
+        args = [
             self.tx_bits,
             self.gn_samples,
             len(self.tx_bits),
             self.modulation.sigma_noise(snr_db),
-            self.llr,
-            stats
-        )
+        ]
+        if self.modulation.name.lower() == 'bpsk':
+            args.extend([self.last_repeat_index, self.number_repetitions])
+        args.extend([self.llr, stats])
+        self.impl(*args)
         return stats[0], stats[1]
 
     def __run_adapter(self, snr_db, rng):

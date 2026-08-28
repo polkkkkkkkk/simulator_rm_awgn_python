@@ -35,6 +35,8 @@ class DemoExperimentConfig:
     modulation: str  # Modulation. A string supported by AwgnQAMChannel
     block_length: int  # Code block length
     correctable_errors: int  # The number of errors that can be corrected
+    last_repeat_index: int = -1
+    number_repetitions: int = 1
 
     def __post_init__(self):
         # Attributes below __must__ be represented by any type of experiment
@@ -91,7 +93,14 @@ class DemoExperimentInstance:
         self.tx_bits = np.zeros((self.settings.block_length,), dtype=np.uint8)
         self.llr = np.zeros((self.settings.block_length,), dtype=np.float64)
         # Channel adapter is not required for randomly-generated codewords
-        self.channel = AwgnQAMChannel(self.settings.modulation, self.tx_bits, self.llr, False)
+        self.channel = AwgnQAMChannel(
+            self.settings.modulation,
+            self.tx_bits,
+            self.llr,
+            False,
+            self.settings.last_repeat_index,
+            self.settings.number_repetitions
+        )
 
     def run(self, snr_db, rng):
         """

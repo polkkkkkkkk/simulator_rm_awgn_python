@@ -98,19 +98,42 @@ void run_bpsk_channel(
   const TL      *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   TL            *llr,
   TL            *stats
   ) {
-  BpskChannel<TL> chan = BpskChannel<TL>(sigma_noise);
   uint32_t ber_cum     = 0;
 
-  for (unsigned int i = 0; i < nbits; i++)
-  {
-    chan.run_sumbol(tx_bits + i, gvals[i], llr + i);
-    ber_cum += ((llr[i] < 0) != tx_bits[i]);
+  if (number_repetitions == 1) {
+    BpskChannel<TL> chan = BpskChannel<TL>(sigma_noise);
+    for (unsigned int i = 0; i < nbits; i++)
+    {
+      chan.run_sumbol(tx_bits + i, gvals[i], llr + i);
+      ber_cum += ((llr[i] < 0) != tx_bits[i]);
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = stats[0];
+  } else {
+    for (unsigned int i = 0; i < nbits; i++)
+    {
+      int repetitions;
+
+      if (static_cast<int>(i) <= last_repeat_index) {
+        repetitions = number_repetitions;
+      } else {
+        repetitions = number_repetitions - 1;
+      }
+
+      TL sigma_eff = static_cast<TL>(
+          sigma_noise / std::sqrt(static_cast<double>(repetitions)));
+      BpskChannel<TL> chan(sigma_eff);
+      chan.run_sumbol(tx_bits + i, gvals[i], llr + i);
+      ber_cum += ((llr[i] < 0) != tx_bits[i]);
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = stats[0];
   }
-  stats[0] = (TL)ber_cum / nbits;
-  stats[1] = stats[0];
 }
 
 template<typename TL>
@@ -215,10 +238,13 @@ void run_bpsk_channel_f32(
   const float   *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   float         *llr,
   float         *stats
   ) {
-  run_bpsk_channel<float>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_bpsk_channel<float>(tx_bits, gvals, nbits, sigma_noise,
+                          last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -263,10 +289,13 @@ void run_bpsk_channel_f64(
   const double  *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   double        *llr,
   double        *stats
   ) {
-  run_bpsk_channel<double>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_bpsk_channel<double>(tx_bits, gvals, nbits, sigma_noise,
+                           last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
