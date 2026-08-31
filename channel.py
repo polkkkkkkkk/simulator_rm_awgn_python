@@ -70,19 +70,20 @@ def load_shared_object():
     wdir = os.path.abspath(os.path.dirname(__file__))
     lib = ctypes.CDLL(os.path.join(wdir, LIB_PATH))
     # Tanner graph initializer
-    # C++ channel implementation arguments:
-    lib.run_bpsk_channel_f32.argtypes = lib_args(np.float32, True)
-    impl_args = lib_args(np.float32)
+    # C++ channel implementation arguments (all functions support repetitions):
+    impl_args = lib_args(np.float32, with_repetitions=True)
+    lib.run_bpsk_channel_f32.argtypes = impl_args
     lib.run_pam4_channel_f32.argtypes = impl_args
     lib.run_qpsk_channel_f32.argtypes = impl_args
     lib.run_qam16_channel_f32.argtypes = impl_args
 
-    lib.run_bpsk_channel_f64.argtypes = lib_args(np.float64, True)
-    impl_args = lib_args(np.float64)
+    impl_args = lib_args(np.float64, with_repetitions=True)
+    lib.run_bpsk_channel_f64.argtypes = impl_args
     lib.run_pam4_channel_f64.argtypes = impl_args
     lib.run_qpsk_channel_f64.argtypes = impl_args
     lib.run_qam16_channel_f64.argtypes = impl_args
     return lib
+
 
 
 def load_channel_impl(modulation_str, dtype):
@@ -208,9 +209,6 @@ class AwgnQAMChannel:
             raise ValueError('last_repeat_index must be at least -1')
         if self.last_repeat_index >= len(self.tx_bits):
             raise ValueError('last_repeat_index is out of range')
-        if modulation.lower() != 'bpsk' and (
-                self.last_repeat_index != -1 or self.number_repetitions != 1):
-            raise ValueError('Repetitions are currently supported only for BPSK')
 
 
     def __run(self, snr_db, rng):
@@ -231,9 +229,9 @@ class AwgnQAMChannel:
             self.gn_samples,
             len(self.tx_bits),
             self.modulation.sigma_noise(snr_db),
+            self.last_repeat_index,
+            self.number_repetitions,
         ]
-        if self.modulation.name.lower() == 'bpsk':
-            args.extend([self.last_repeat_index, self.number_repetitions])
         args.extend([self.llr, stats])
         self.impl(*args)
         return stats[0], stats[1]

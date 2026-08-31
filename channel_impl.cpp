@@ -142,6 +142,8 @@ void run_pam4_channel(
   const TL      *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   TL            *llr_channel,
   TL            *stats
   ) {
@@ -149,16 +151,39 @@ void run_pam4_channel(
   uint32_t ber_cum      = 0;
   uint32_t ser_cum      = 0;
   unsigned int    bpdof = 2; // Bits per degree of freedom
-  Pam4Channel<TL> chan  = Pam4Channel<TL>(sigma_noise);
 
-  for (unsigned int i = 0; i < nbits / bpdof; i++)
-  {
-    unsigned int idx = bpdof * i;
-    chan.run_sumbol(tx_bits + idx, gvals[i], llr_channel + idx);
-    symbol_stats_2bps<TL>(tx_bits + idx, llr_channel + idx, ber_cum, ser_cum);
+  if (number_repetitions == 1){
+    Pam4Channel<TL> chan  = Pam4Channel<TL>(sigma_noise);
+
+    for (unsigned int i = 0; i < nbits / bpdof; i++)
+    {
+      unsigned int idx = bpdof * i;
+      chan.run_sumbol(tx_bits + idx, gvals[i], llr_channel + idx);
+      symbol_stats_2bps<TL>(tx_bits + idx, llr_channel + idx, ber_cum, ser_cum);
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = (TL)ser_cum / (nbits / 2);
+  } else {
+    for (unsigned int i = 0; i < nbits / bpdof; i++){
+      int repetitions;
+      unsigned int idx = bpdof * i;
+
+      if (static_cast<int>(idx) <= last_repeat_index) {
+        repetitions = number_repetitions;
+      } else {
+        repetitions = number_repetitions - 1;
+      }
+
+      TL sigma_eff = static_cast<TL>(sigma_noise / std::sqrt(static_cast<double>(repetitions)));
+      Pam4Channel<TL> chan(sigma_eff);
+
+      chan.run_sumbol(tx_bits + idx, gvals[i], llr_channel + idx);
+      symbol_stats_2bps<TL>(tx_bits + idx, llr_channel + idx, ber_cum, ser_cum);
+
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = (TL)ser_cum / (nbits / 2);
   }
-  stats[0] = (TL)ber_cum / nbits;
-  stats[1] = (TL)ser_cum / (nbits / 2);
 }
 
 // Complex-valued channels
@@ -169,29 +194,61 @@ void run_qpsk_channel(
   const TL      *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   TL            *llr,
   TL            *stats
   ) {
-  unsigned int    bps  = 2; // Bits per symbol
-  BpskChannel<TL> chan = BpskChannel<TL>(sigma_noise);
-
+  
   // Statistics
   uint32_t ber_cum = 0;
-  uint32_t ser_cum = 0;
-
-  for (unsigned int i = 0; i < nbits; i += 2)
+  uint32_t ser_cum = 0;  
+  unsigned int    bps  = 2; // Bits per symbol
+  
+  if (number_repetitions == 1)
   {
-    // I-component
-    chan.run_sumbol(tx_bits + i,     gvals[i],     llr + i);
+    BpskChannel<TL> chan = BpskChannel<TL>(sigma_noise);
 
-    // Q-component
-    chan.run_sumbol(tx_bits + i + 1, gvals[i + 1], llr + i + 1);
+    for (unsigned int i = 0; i < nbits; i += 2)
+    {
+      // I-component
+      chan.run_sumbol(tx_bits + i,     gvals[i],     llr + i);
 
-    // SER for both I and Q
-    symbol_stats_2bps<TL>(tx_bits + i, llr + i, ber_cum, ser_cum);
+      // Q-component
+      chan.run_sumbol(tx_bits + i + 1, gvals[i + 1], llr + i + 1);
+
+      // SER for both I and Q
+      symbol_stats_2bps<TL>(tx_bits + i, llr + i, ber_cum, ser_cum);
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = (TL)ser_cum / (nbits / bps);
+    } else {
+    for (unsigned int i = 0; i < nbits; i += 2)
+    {
+      int repetitions;
+
+      if (static_cast<int>(i) <= last_repeat_index) {
+        repetitions = number_repetitions;
+      } else {
+        repetitions = number_repetitions - 1;
+      }
+
+      TL sigma_eff = static_cast<TL>(
+          sigma_noise / std::sqrt(static_cast<double>(repetitions)));
+      BpskChannel<TL> chan(sigma_eff);
+      
+      // I-component
+      chan.run_sumbol(tx_bits + i,     gvals[i],     llr + i);
+
+      // Q-component
+      chan.run_sumbol(tx_bits + i + 1, gvals[i + 1], llr + i + 1);
+
+      // SER for both I and Q
+      symbol_stats_2bps<TL>(tx_bits + i, llr + i, ber_cum, ser_cum);
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = (TL)ser_cum / (nbits / bps);
   }
-  stats[0] = (TL)ber_cum / nbits;
-  stats[1] = (TL)ser_cum / (nbits / bps);
 }
 
 template<typename TL>
@@ -200,11 +257,12 @@ void run_qam16_channel(
   const TL      *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int           last_repeat_index,
+  int           number_repetitions,
   TL            *llr,
   TL            *stats
   ) {
-  // QAM-16 is equal to the orthogonal product of two PAM-4 modulations
-  Pam4Channel<TL> chan  = Pam4Channel<TL>(sigma_noise);
+
   unsigned int    bpdof = 2; // Bits per degree of freedom
   unsigned int    bps   = 4; // Bits per symbol
 
@@ -212,22 +270,51 @@ void run_qam16_channel(
   uint32_t ber_cum = 0;
   uint32_t ser_cum = 0;
 
-  for (unsigned int i = 0; i < nbits / bpdof; i += 2)
-  {
-    unsigned int idx = bpdof * i;
+  if (number_repetitions == 1){
+    Pam4Channel<TL> chan  = Pam4Channel<TL>(sigma_noise);
+    for (unsigned int i = 0; i < nbits / bpdof; i += 2){
+      unsigned int idx = bpdof * i;
 
-    // I-component
-    chan.run_sumbol(tx_bits + idx,         gvals[i],     llr + idx);
+      // I-component
+      chan.run_sumbol(tx_bits + idx,         gvals[i],     llr + idx);
 
-    // Q-component
-    chan.run_sumbol(tx_bits + idx + bpdof, gvals[i + 1], llr + idx + bpdof);
+      // Q-component
+      chan.run_sumbol(tx_bits + idx + bpdof, gvals[i + 1], llr + idx + bpdof);
 
-    // SER for both I and Q
-    symbol_stats_4bps<TL>(tx_bits + idx, llr + idx, ber_cum, ser_cum);
+      // SER for both I and Q
+      symbol_stats_4bps<TL>(tx_bits + idx, llr + idx, ber_cum, ser_cum);
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = (TL)ser_cum / (nbits / bps);
+  } else {
+    for (unsigned int i = 0; i < nbits / bpdof; i += 2)
+    {
+      int repetitions;
+      unsigned int idx = bpdof * i;
+
+      if (static_cast<int>(idx) <= last_repeat_index) {
+        repetitions = number_repetitions;
+      } else {
+        repetitions = number_repetitions - 1;
+      }
+
+      TL sigma_eff = static_cast<TL>(
+          sigma_noise / std::sqrt(static_cast<double>(repetitions)));
+      Pam4Channel<TL> chan(sigma_eff);
+
+      // I-component
+      chan.run_sumbol(tx_bits + idx,         gvals[i],     llr + idx);
+
+      // Q-component
+      chan.run_sumbol(tx_bits + idx + bpdof, gvals[i + 1], llr + idx + bpdof);
+
+      // SER for both I and Q
+      symbol_stats_4bps<TL>(tx_bits + idx, llr + idx, ber_cum, ser_cum);
+    }
+    stats[0] = (TL)ber_cum / nbits;
+    stats[1] = (TL)ser_cum / (nbits / bps);
   }
-  stats[0] = (TL)ber_cum / nbits;
-  stats[1] = (TL)ser_cum / (nbits / bps);
-}
+  }
 
 // API:
 
@@ -243,8 +330,7 @@ void run_bpsk_channel_f32(
   float         *llr,
   float         *stats
   ) {
-  run_bpsk_channel<float>(tx_bits, gvals, nbits, sigma_noise,
-                          last_repeat_index, number_repetitions, llr, stats);
+  run_bpsk_channel<float>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -253,10 +339,12 @@ void run_pam4_channel_f32(
   const float   *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   float         *llr,
   float         *stats
   ) {
-  run_pam4_channel<float>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_pam4_channel<float>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -265,10 +353,12 @@ void run_qpsk_channel_f32(
   const float   *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   float         *llr,
   float         *stats
   ) {
-  run_qpsk_channel<float>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_qpsk_channel<float>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -277,10 +367,12 @@ void run_qam16_channel_f32(
   const float   *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   float         *llr,
   float         *stats
   ) {
-  run_qam16_channel<float>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_qam16_channel<float>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -294,8 +386,7 @@ void run_bpsk_channel_f64(
   double        *llr,
   double        *stats
   ) {
-  run_bpsk_channel<double>(tx_bits, gvals, nbits, sigma_noise,
-                           last_repeat_index, number_repetitions, llr, stats);
+  run_bpsk_channel<double>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -304,10 +395,12 @@ void run_pam4_channel_f64(
   const double  *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   double        *llr,
   double        *stats
   ) {
-  run_pam4_channel<double>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_pam4_channel<double>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -316,10 +409,12 @@ void run_qpsk_channel_f64(
   const double  *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   double        *llr,
   double        *stats
   ) {
-  run_qpsk_channel<double>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_qpsk_channel<double>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
 
 extern "C"
@@ -328,8 +423,10 @@ void run_qam16_channel_f64(
   const double  *gvals,
   unsigned int   nbits,
   double         sigma_noise,
+  int            last_repeat_index,
+  int            number_repetitions,
   double        *llr,
   double        *stats
   ) {
-  run_qam16_channel<double>(tx_bits, gvals, nbits, sigma_noise, llr, stats);
+  run_qam16_channel<double>(tx_bits, gvals, nbits, sigma_noise, last_repeat_index, number_repetitions, llr, stats);
 }
