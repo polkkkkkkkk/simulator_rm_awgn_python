@@ -30,8 +30,8 @@ The code is assumed to be used as a module. To run demo experiment, proceed thro
     - `correctable_errors` specifies the number of errors that demo-decoder can correct (see [demo.py](demo.py))
     - `modulation` a string constant specifying the modulation (upper or lower case). Supported values are 'BPSK', 'QPSK', 'PAM-4', and 'QAM-16'
     - `last_repeat_index` is the zero-based index of the last symbol transmitted `number_repetitions` times. Symbols after this index are transmitted `number_repetitions - 1` times. Use `-1` when no symbol is repeated.
-    - `number_repetitions` is the number of transmissions for symbols up to `last_repeat_index`. Repetition-aware noise is currently supported only for BPSK. It must be at least `1`.
-    - For BPSK, the effective noise variance is `sigma_noise^2 / number_repetitions` before `last_repeat_index` and `sigma_noise^2 / (number_repetitions - 1)` after it. When `number_repetitions` is `1`, the original channel implementation and variance `sigma_noise^2` are used.
+    - `number_repetitions` is the number of transmissions for symbols up to `last_repeat_index`. The repetition-aware noise logic is available for all modulation types supported by the channel implementation. It must be at least `1`.
+    - For repeated symbols, the effective noise variance is `sigma_noise^2 / number_repetitions` before `last_repeat_index` and `sigma_noise^2 / (number_repetitions - 1)` after it. When `number_repetitions` is `1`, the original channel implementation and variance `sigma_noise^2` are used.
   - To run simulations, specify the following parameters:
     - `snr_range` a string that represents a MATLAB-style array '`min`:`step`:`max`'
     - `max_errors` is a maximum number of errors to be collected. If the specified number of errors has happened, simulator stops evaluating the corresponding SNR point and proceeds to the next one.
